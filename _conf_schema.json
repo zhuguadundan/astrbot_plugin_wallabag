@@ -1,0 +1,93 @@
+{
+  "wallabag_url": {
+    "description": "Wallabag服务器地址",
+    "type": "string",
+    "hint": "Wallabag实例的完整URL，例如: https://wallabag.example.com",
+    "obvious_hint": true
+  },
+  "client_id": {
+    "description": "OAuth客户端ID",
+    "type": "string",
+    "hint": "在Wallabag开发者页面创建的OAuth客户端ID",
+    "obvious_hint": true
+  },
+  "client_secret": {
+    "description": "OAuth客户端密钥",
+    "type": "string",
+    "hint": "在Wallabag开发者页面创建的OAuth客户端密钥",
+    "obvious_hint": true
+  },
+  "username": {
+    "description": "Wallabag用户名",
+    "type": "string",
+    "hint": "您的Wallabag账户用户名",
+    "obvious_hint": true
+  },
+  "password": {
+    "description": "Wallabag密码",
+    "type": "string",
+    "hint": "您的Wallabag账户密码",
+    "obvious_hint": true
+  },
+  "auto_save": {
+    "description": "自动保存URL",
+    "type": "bool",
+    "hint": "是否自动检测并保存消息中的URL",
+    "default": true
+  },
+  "request_timeout": {
+    "description": "请求超时时间",
+    "type": "int",
+    "hint": "网络请求超时时间（秒）",
+    "default": 30
+  },
+  "cache_max_size": {
+    "description": "缓存最大数量",
+    "type": "int",
+    "hint": "已保存URL缓存的最大数量",
+    "default": 1000
+  },
+  "debug_mode": {
+    "description": "调试模式",
+    "type": "bool",
+    "hint": "是否启用调试模式，会输出更详细的日志",
+    "default": false
+  },
+  "advanced_settings": {
+    "description": "高级设置",
+    "type": "object",
+    "hint": "高级配置选项，通常不需要修改",
+    "items": {
+      "token_refresh_buffer": {
+        "description": "令牌刷新缓冲时间",
+        "type": "int",
+        "hint": "令牌过期前多少秒开始刷新",
+        "default": 60
+      },
+      "max_retry_attempts": {
+        "description": "最大重试次数",
+        "type": "int",
+        "hint": "API调用失败时的最大重试次数",
+        "default": 3
+      },
+      "retry_delay": {
+        "description": "重试延迟",
+        "type": "int",
+        "hint": "重试之间的延迟时间（秒）",
+        "default": 2
+      },
+      "user_agent": {
+        "description": "用户代理",
+        "type": "string",
+        "hint": "HTTP请求的用户代理字符串",
+        "default": "AstrBot-Wallabag-Plugin/1.0.0"
+      },
+      "skip_ssl_verify": {
+        "description": "跳过SSL验证",
+        "type": "bool",
+        "hint": "是否跳过SSL证书验证（不推荐，仅用于测试）",
+        "default": false
+      }
+    }
+  }
+}
