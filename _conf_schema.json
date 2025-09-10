@@ -2,37 +2,37 @@
   "wallabag_url": {
     "description": "Wallabag服务器地址",
     "type": "string",
-    "hint": "Wallabag实例的完整URL，例如: https://wallabag.example.com",
+    "hint": "Wallabag 实例的完整 URL，例如 https://wallabag.example.com",
     "obvious_hint": true
   },
   "client_id": {
-    "description": "OAuth客户端ID",
+    "description": "OAuth 客户端 ID",
     "type": "string",
-    "hint": "在Wallabag开发者页面创建的OAuth客户端ID",
+    "hint": "在 Wallabag 开发者页面创建的 OAuth 客户端 ID",
     "obvious_hint": true
   },
   "client_secret": {
-    "description": "OAuth客户端密钥",
+    "description": "OAuth 客户端密钥",
     "type": "string",
-    "hint": "在Wallabag开发者页面创建的OAuth客户端密钥",
+    "hint": "在 Wallabag 开发者页面创建的 OAuth 客户端密钥",
     "obvious_hint": true
   },
   "username": {
-    "description": "Wallabag用户名",
+    "description": "Wallabag 用户名",
     "type": "string",
-    "hint": "您的Wallabag账户用户名",
+    "hint": "您的 Wallabag 账户用户名",
     "obvious_hint": true
   },
   "password": {
-    "description": "Wallabag密码",
+    "description": "Wallabag 密码",
     "type": "string",
-    "hint": "您的Wallabag账户密码",
+    "hint": "您的 Wallabag 账户密码",
     "obvious_hint": true
   },
   "auto_save": {
-    "description": "自动保存URL",
+    "description": "自动保存 URL",
     "type": "bool",
-    "hint": "是否自动检测并保存消息中的URL",
+    "hint": "是否自动检测并保存消息中的 URL",
     "default": true
   },
   "request_timeout": {
@@ -44,19 +44,19 @@
   "cache_max_size": {
     "description": "缓存最大数量",
     "type": "int",
-    "hint": "已保存URL缓存的最大数量",
+    "hint": "已保存 URL 缓存的最大数量",
     "default": 1000
   },
   "debug_mode": {
     "description": "调试模式",
     "type": "bool",
-    "hint": "是否启用调试模式，会输出更详细的日志",
+    "hint": "是否启用调试模式，将输出更详细的日志",
     "default": false
   },
   "advanced_settings": {
     "description": "高级设置",
     "type": "object",
-    "hint": "高级配置选项，通常不需要修改",
+    "hint": "高级配置选项，通常无需修改",
     "items": {
       "token_refresh_buffer": {
         "description": "令牌刷新缓冲时间",
@@ -67,7 +67,7 @@
       "max_retry_attempts": {
         "description": "最大重试次数",
         "type": "int",
-        "hint": "API调用失败时的最大重试次数",
+        "hint": "API 调用失败时的最大重试次数",
         "default": 3
       },
       "retry_delay": {
@@ -79,13 +79,13 @@
       "user_agent": {
         "description": "用户代理",
         "type": "string",
-        "hint": "HTTP请求的用户代理字符串",
+        "hint": "HTTP 请求的用户代理字符串",
         "default": "AstrBot-Wallabag-Plugin/1.0.0"
       },
       "skip_ssl_verify": {
-        "description": "跳过SSL验证",
+        "description": "跳过 SSL 验证",
         "type": "bool",
-        "hint": "是否跳过SSL证书验证（不推荐，仅用于测试）",
+        "hint": "是否跳过 SSL 证书验证（不推荐，仅用于测试）",
         "default": false
       }
     }
