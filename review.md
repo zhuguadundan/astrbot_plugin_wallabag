@@ -1,32 +1,57 @@
-main.py
-本次审查发现了一些可以改进的地方，主要集中在性能优化和代码简化方面。
+潜在缺陷或问题
+过于宽泛的异常捕获
 
-潜在缺陷
-频繁的文件I/O操作: 在 on_message 方法中，self._save_cache() 在 for 循环内部被调用。这意味着如果一条消息包含多个新的URL，程序会为每个成功保存的URL都执行一次完整的文件写入操作。这会造成不必要的I/O开销，尤其是在短时间内处理大量URL时，可能会影响性能并增加磁盘写入负担。
+在代码的多个地方使用了 except Exception 来捕获所有可能的异常。这是一种不良实践，因为它会屏蔽掉未预料到的错误（比如 TypeError 或 NameError），使得调试变得异常困难，甚至可能导致程序在出现问题时静默失败或以非预期的方式继续运行。
 
-# L202-205
-if result:
-    self._cache_add(url)
-    self._save_cache() # <- 此处在循环内，会频繁写入文件
-    title = result.get('title', '未知')[:50]
-    await event.send(event.plain_result(f"📎 自动保存: {title}..."))
-建议: 将 self._save_cache() 调用移出 for 循环，在处理完一条消息中的所有URL后，再统一执行一次保存操作。或者，依赖 terminate 方法中的 _save_cache() 来在插件关闭时最终保存，以进一步减少写入次数。
+影响范围:
 
+save_url 方法
+on_message 方法
+_get_access_token 方法
+_get_advanced 方法
+__init__ 方法中的 StarTools.get_data_dir() 调用
+建议:
+应替换为更具体的异常类型。例如，在网络请求相关的代码块中，捕获 aiohttp.ClientError, asyncio.TimeoutError 等；在配置读取时，捕获 KeyError 或 TypeError。如果确实需要一个最终的捕获，也应该在记录详细错误后重新抛出或进行更明确的处理，而不是简单地忽略。
+
+示例 (_get_advanced 方法):
+
+# 不推荐
+def _get_advanced(self, key: str, default=None):
+    try:
+        adv = self.config.get('advanced_settings', {})
+        return adv.get(key, default)
+    except Exception: # 会捕获到所有错误，包括因配置错误导致的 TypeError
+        return default
+
+# 推荐
+def _get_advanced(self, key: str, default=None):
+    try:
+        adv = self.config.get('advanced_settings', {})
+        if not isinstance(adv, dict):
+            logger.warning("高级设置 (advanced_settings) 格式不正确，应为字典。")
+            return default
+        return adv.get(key, default)
+    except Exception as e:
+        # 捕获其他预料之外的错误并记录
+        logger.error(f"获取高级设置 '{key}' 时发生未知错误: {e}")
+        return default
 代码质量与编码规范
-冗余的URL验证: 在 _extract_urls 方法中，首先使用正则表达式 re.findall 提取所有符合模式的字符串，然后对提取出的每个URL调用 _is_valid_url 方法进行再次验证。而 _is_valid_url 方法内部使用了几乎完全相同的正则表达式 re.match。这导致了双重且冗余的正则匹配，增加了不必要的计算开销。
+抛出通用异常
 
-# L213
-def _extract_urls(self, text: str) -> List[str]:
-    url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*'
-    urls = re.findall(url_pattern, text)
-    # 此处调用 _is_valid_url 造成了冗余
-    return [url for url in urls if self._is_valid_url(url)]
+在 _save_to_wallabag 和 _get_access_token 方法中，当遇到无法处理的错误时，代码通过 raise Exception(...) 抛出了一个通用的 Exception。这使得上层调用者难以根据不同的错误类型进行精细化的处理。
 
-# L218
-def _is_valid_url(self, url: str) -> bool:
-    if not url or not url.startswith(('http://', 'https://')):
-        return False
-    # 这里的正则与 _extract_urls 中的几乎一样
-    url_pattern = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*'
-    return re.match(url_pattern, url) is not None
-建议: 移除 _is_valid_url 方法，或简化其逻辑。由于 re.findall 已经确保了URL的基本格式，_extract_urls 方法可以简化为仅依赖 re.findall 的结果，无需再次验证。如果仍需 _is_valid_url 用于其他场景（如手动保存命令），可以保留，但在 _extract_urls 中应避免重复调用。
+影响范围:
+
+_save_to_wallabag 方法中的 raise Exception("无法获取访问令牌") 和 raise Exception("保存失败：已达最大重试次数") 等。
+建议:
+定义一个或多个插件特定的自定义异常类（例如 WallabagAPIError, TokenError），或者使用更合适的内置异常（如 RuntimeError），以便调用栈的上层可以进行更具针对性的 try...except 处理。
+
+示例:
+
+class WallabagAuthError(Exception):
+    """Wallabag 认证失败异常"""
+    pass
+
+# 在 _save_to_wallabag 中
+if not token:
+    raise WallabagAuthError("无法获取或刷新访问令牌")
