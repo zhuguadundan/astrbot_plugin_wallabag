@@ -1,5 +1,5 @@
 name: wallabag 
-desc: 自动监听URL并保存到Wallabag服务 
+desc: 自动监听消息中的 URL 并保存到 Wallabag 
 version: v1.0.0 
 author: zhuguadundan 
-repo: https://github.com/astrbot/astrbot_plugin_wallabag 
+repo: https://github.com/zhuguadundan/astrbot_plugin_wallabag
