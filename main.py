@@ -274,9 +274,6 @@ class WallabagPlugin(Star):
 
         try:
             wallabag_url = self.config.get('wallabag_url', '').rstrip('/')
-            # 发现常见误配路径时给出提示
-            if 'index.php' in wallabag_url or wallabag_url.endswith('/app.php'):
-                logger.warning("wallabag_url 包含 index.php/app.php，可能导致 API 路径错误，请仅填写站点根地址，例如 https://example.com")
             client_id = self.config.get('client_id', '')
             client_secret = self.config.get('client_secret', '')
             username = self.config.get('username', '')
@@ -359,24 +356,18 @@ class WallabagPlugin(Star):
         for attempt in range(1, max_attempts + 1):
             headers = {
                 'Authorization': f'Bearer {token}',
-                'Accept': 'application/json'
+                'Content-Type': 'application/json'
             }
             try:
-                # 使用表单编码提交参数，兼容更多 wallabag 部署
-                async with self.http_session.post(api_url, data=data, headers=headers) as response:
+                async with self.http_session.post(api_url, json=data, headers=headers) as response:
                     if response.status == 200:
                         try:
                             result = await response.json()
                         except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
                             logger.error(f"保存URL响应解析失败: {e}")
                             raise WallabagAPIError("响应解析失败", status=200)
-                        # 语义校验：必须包含 id 或 url 等关键字段才判定为成功
-                        if isinstance(result, dict) and ("id" in result or ("url" in result and result.get("url"))):
-                            logger.info(f"成功保存URL: {url} (id={result.get('id')})")
-                            return result
-                        # 返回 200 但没有有效实体，视为失败以免误报成功
-                        logger.error(f"保存URL返回内容异常，未包含有效实体: {result}")
-                        raise WallabagAPIError("保存返回异常：无有效实体", status=200)
+                        logger.info(f"成功保存URL: {url}")
+                        return result
                     elif response.status == 401:
                         # 令牌过期，刷新一次并重试
                         logger.warning("访问被拒绝(401)，尝试刷新令牌后重试")
@@ -413,3 +404,4 @@ class WallabagPlugin(Star):
             # 兜底日志，避免静默失败
             logger.exception(f"获取高级设置 '{key}' 时发生未知错误: {e}")
             return default
+
