@@ -2,25 +2,25 @@
   "wallabag_url": {
     "description": "Wallabag 服务器地址",
     "type": "string",
-    "hint": "Wallabag 实例的完整 URL，例如：https://wallabag.example.com",
+    "hint": "Wallabag 实例的完�?URL，例如：https://wallabag.example.com",
     "obvious_hint": true
   },
   "client_id": {
-    "description": "OAuth 客户端 ID",
+    "description": "OAuth 客户�?ID",
     "type": "string",
-    "hint": "在 Wallabag 开发者页面创建的 OAuth 客户端 ID",
+    "hint": "�?Wallabag 开发者页面创建的 OAuth 客户�?ID",
     "obvious_hint": true
   },
   "client_secret": {
-    "description": "OAuth 客户端密钥",
+    "description": "OAuth 客户端密�?,
     "type": "string",
-    "hint": "在 Wallabag 开发者页面创建的 OAuth 客户端密钥",
+    "hint": "�?Wallabag 开发者页面创建的 OAuth 客户端密�?,
     "obvious_hint": true
   },
   "username": {
-    "description": "Wallabag 用户名",
+    "description": "Wallabag 用户�?,
     "type": "string",
-    "hint": "您的 Wallabag 账户用户名",
+    "hint": "您的 Wallabag 账户用户�?,
     "obvious_hint": true
   },
   "password": {
@@ -38,13 +38,13 @@
   "request_timeout": {
     "description": "请求超时时间",
     "type": "int",
-    "hint": "网络请求超时时间（秒）",
+    "hint": "网络请求超时时间（秒�?,
     "default": 30
   },
   "cache_max_size": {
-    "description": "缓存最大数量",
+    "description": "缓存最大数�?,
     "type": "int",
-    "hint": "已保存 URL 缓存的最大数量（FIFO 淘汰）",
+    "hint": "已保�?URL 缓存的最大数量（FIFO 淘汰�?,
     "default": 1000
   },
   "debug_mode": {
@@ -61,13 +61,13 @@
       "token_refresh_buffer": {
         "description": "令牌刷新缓冲时间",
         "type": "int",
-        "hint": "令牌过期前多少秒开始刷新",
+        "hint": "令牌过期前多少秒开始刷�?,
         "default": 60
       },
       "max_retry_attempts": {
-        "description": "最大重试次数",
+        "description": "最大重试次�?,
         "type": "int",
-        "hint": "API 调用失败时的最大重试次数",
+        "hint": "API 调用失败时的最大重试次�?,
         "default": 3
       },
       "retry_delay": {
@@ -85,9 +85,10 @@
       "skip_ssl_verify": {
         "description": "跳过 SSL 验证",
         "type": "bool",
-        "hint": "禁用 SSL 证书校验，存在中间人攻击风险（MITM）。仅在受信网络或测试环境使用，生产环境不建议开启",
+        "hint": "禁用 SSL 证书校验，存在中间人攻击风险（MITM）。仅在受信网络或测试环境使用，生产环境不建议开�?,
         "default": false
       }
     }
   }
 }
+
