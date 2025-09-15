@@ -1,5 +1,5 @@
-name: wallabag # 这是你的插件的唯一识别名。
-desc: AstrBot Wallabag插件，自动监听URL并保存到Wallabag服务 # 插件简短描述
-version: v1.0.0 # 插件版本号。格式：v1.1.1 或者 v1.1
-author: AstrBot Developer # 作者
-repo: https://github.com/astrbot/astrbot_plugin_wallabag # 插件的仓库地址
+name: wallabag 
+desc: 自动监听URL并保存到Wallabag服务 
+version: v1.0.0 
+author: zhuguadundan 
+repo: https://github.com/astrbot/astrbot_plugin_wallabag 
