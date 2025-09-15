@@ -55,6 +55,16 @@ class WallabagPlugin(Star):
             self.data_dir = Path("data/wallabag")
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
+        # 统一读取与校验缓存大小配置，避免重复取值与类型转换
+        try:
+            self.cache_max_size = int(self.config.get("cache_max_size", 1000))
+            if self.cache_max_size < 1:
+                logger.warning("cache_max_size 值过小，已重置为 1")
+                self.cache_max_size = 1
+        except (TypeError, ValueError):
+            logger.warning("cache_max_size 配置无效，使用默认 1000")
+            self.cache_max_size = 1000
+
         # 加载缓存（FIFO）
         self._load_cache()
 
@@ -89,7 +99,7 @@ class WallabagPlugin(Star):
                 with open(cache_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, list):
-                    max_size = int(self.config.get("cache_max_size", 1000))
+                    max_size = self.cache_max_size
                     for url in data[-max_size:]:
                         if isinstance(url, str) and url not in self._url_cache_set:
                             self._url_cache_queue.append(url)
@@ -122,7 +132,7 @@ class WallabagPlugin(Star):
             return
         self._url_cache_queue.append(url)
         self._url_cache_set.add(url)
-        max_size = int(self.config.get("cache_max_size", 1000))
+        max_size = self.cache_max_size
         while len(self._url_cache_queue) > max_size:
             try:
                 old = self._url_cache_queue.popleft()
@@ -242,6 +252,7 @@ class WallabagPlugin(Star):
 
     async def _get_access_token(self) -> Optional[str]:
         """获取或刷新访问令牌"""
+        return await self._get_access_token_simple()
         if (
             self.access_token
             and self.token_expires_at
@@ -313,16 +324,88 @@ class WallabagPlugin(Star):
                     await asyncio.sleep(retry_delay)
             return None
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.error(f"获取访问令牌网络异常: {e}")
-            return None
         except (ValueError, KeyError, TypeError) as e:
             logger.error(f"获取访问令牌配置或解析错误: {e}")
             return None
 
+    async def _get_access_token_simple(self) -> Optional[str]:
+        """获取或刷新访问令牌（简化异常结构，前置配置校验）"""
+        if (
+            self.access_token
+            and self.token_expires_at
+            and asyncio.get_running_loop().time() < self.token_expires_at
+        ):
+            return self.access_token
+
+        wallabag_url = self.config.get("wallabag_url", "").rstrip("/")
+        client_id = self.config.get("client_id", "")
+        client_secret = self.config.get("client_secret", "")
+        username = self.config.get("username", "")
+        password = self.config.get("password", "")
+
+        if not all([wallabag_url, client_id, client_secret, username, password]):
+            logger.error("Wallabag 配置不完整，请检查参数")
+            return None
+
+        token_url = f"{wallabag_url}/oauth/v2/token"
+        max_attempts = int(self._get_advanced("max_retry_attempts", 3))
+        retry_delay = float(self._get_advanced("retry_delay", 2))
+
+        for attempt in range(1, max_attempts + 1):
+            if self.refresh_token:
+                data = {
+                    "grant_type": "refresh_token",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": self.refresh_token,
+                }
+            else:
+                data = {
+                    "grant_type": "password",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "username": username,
+                    "password": password,
+                }
+            try:
+                async with self.http_session.post(token_url, data=data) as response:
+                    if response.status == 200:
+                        token_data = await response.json()
+                        self.access_token = token_data["access_token"]
+                        self.refresh_token = token_data.get("refresh_token")
+                        buffer = float(self._get_advanced("token_refresh_buffer", 60))
+                        expires_in = float(token_data.get("expires_in", 3600))
+                        effective = max(10.0, expires_in - buffer)
+                        self.token_expires_at = (
+                            asyncio.get_running_loop().time() + effective
+                        )
+                        return self.access_token
+                    elif response.status == 401:
+                        logger.warning("访问被拒绝(401)，将清空令牌并重试")
+                        self.access_token = None
+                        self.refresh_token = None
+                    elif 500 <= response.status < 600:
+                        error_text = await response.text()
+                        logger.error(f"服务端错误: {response.status} - {error_text}")
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"获取访问令牌失败: {response.status} - {error_text}")
+            except (
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                ClientResponseError,
+                json.JSONDecodeError,
+            ) as e:
+                logger.error(f"获取访问令牌异常 (尝试 {attempt}/{max_attempts}): {e}")
+
+            if attempt < max_attempts:
+                await asyncio.sleep(retry_delay)
+
+        return None
+
     async def _save_to_wallabag(self, url: str) -> Optional[Dict]:
         """保存URL到Wallabag"""
-        token = await self._get_access_token()
+        token = await self._get_access_token_simple()
         if not token:
             raise WallabagAuthError("无法获取访问令牌")
 
@@ -355,7 +438,7 @@ class WallabagPlugin(Star):
                     elif response.status == 401:
                         logger.warning("访问被拒绝(401)，尝试刷新令牌后重试")
                         self.access_token = None
-                        token = await self._get_access_token()
+                        token = await self._get_access_token_simple()
                         if not token:
                             raise WallabagAuthError("刷新令牌失败")
                         continue
