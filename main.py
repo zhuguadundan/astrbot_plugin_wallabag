@@ -309,20 +309,24 @@ class WallabagPlugin(Star):
         retry_delay = float(self._get_advanced('retry_delay', 2))
 
         for attempt in range(1, max_attempts + 1):
+            # 使用表单编码更兼容（不要显式设置 JSON Content-Type）
             headers = {
                 'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json'
             }
             try:
-                async with self.http_session.post(api_url, json=data, headers=headers) as response:
+                async with self.http_session.post(api_url, data=data, headers=headers) as response:
                     if response.status == 200:
                         try:
                             result = await response.json()
                         except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
                             logger.error(f"保存URL响应解析失败: {e}")
                             raise WallabagAPIError("响应解析失败", status=200)
-                        logger.info(f"成功保存URL: {url}")
-                        return result
+                        # 仅当响应包含 id 或有效 url 字段时才视为成功，避免假阳性
+                        if isinstance(result, dict) and ("id" in result or ("url" in result and result.get("url"))):
+                            logger.info(f"成功保存URL: {url}")
+                            return result
+                        logger.error(f"保存URL返回内容异常，未包含有效实体: {result}")
+                        return None
                     elif response.status == 401:
                         # 令牌过期，刷新一次并重试
                         logger.warning("访问被拒绝(401)，尝试刷新令牌后重试")
