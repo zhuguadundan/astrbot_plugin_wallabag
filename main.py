@@ -1,6 +1,9 @@
 import re
+import os
 import json
 import asyncio
+import tempfile
+import random
 from typing import Optional, Dict, List, Deque, Set
 from pathlib import Path
 from collections import deque
@@ -42,9 +45,23 @@ class WallabagPlugin(Star):
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.token_expires_at: Optional[float] = None
-        # URL 缓存采用 FIFO：使用队列维护顺序，集合用于快速查重
+
+        # URL 缓存采用 FIFO：队列维护顺序，集合用于快速查找
         self._url_cache_queue: Deque[str] = deque()
         self._url_cache_set: Set[str] = set()
+
+        # 串行化令牌刷新与缓存落盘，避免并发竞态
+        self._token_lock = asyncio.Lock()
+        self._cache_lock = asyncio.Lock()
+
+        # URL 正则与清理配置（单一来源，避免重复匹配）
+        self._url_pattern_core = r'https?://(?:[-\\w.]|(?:%[\\da-fA-F]{2}))+[/\\w\\.-]*\\??[/\\w\\.-=&%]*'
+        # 非锚定：文本内提取
+        self._url_in_text_regex = re.compile(self._url_pattern_core)
+        # 锚定：格式校验
+        self._url_validation_regex = re.compile(r'^' + self._url_pattern_core)
+        # 可能黏在 URL 末尾的标点（ASCII + 常见全角标点，使用 Unicode 转义避免编码问题）
+        self._trailing_punct = ",;:!?).\"'" + "\u3002\uFF0C\uFF1B\uFF1A\uFF01\uFF1F\uFF09\u3001\u300B\u300D\u201D\u2019"
 
         # 确保数据目录存在
         try:
@@ -75,7 +92,9 @@ class WallabagPlugin(Star):
         if self.http_session:
             await self.http_session.close()
             self.http_session = None
-        self._save_cache()
+        # 兜底保存缓存
+        async with self._cache_lock:
+            self._save_cache()
         logger.info("Wallabag 插件已停止")
 
     def _load_cache(self):
@@ -100,11 +119,14 @@ class WallabagPlugin(Star):
                 self._url_cache_set.clear()
 
     def _save_cache(self):
-        """保存缓存的 URL（保持顺序）"""
+        """保存缓存 URL（保持顺序，原子替换以降低损坏风险）"""
         cache_file = self.data_dir / "saved_urls.json"
         try:
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(list(self._url_cache_queue), f, ensure_ascii=False, indent=2)
+            # 写入临时文件后原子替换，降低中断导致文件损坏的风险
+            with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=str(self.data_dir), delete=False) as tf:
+                json.dump(list(self._url_cache_queue), tf, ensure_ascii=False, indent=2)
+                temp_name = tf.name
+            os.replace(temp_name, cache_file)
         except OSError as e:
             logger.error(f"保存缓存失败: {e}")
 
@@ -134,11 +156,11 @@ class WallabagPlugin(Star):
         """wb 别名命令，显示帮助"""
         help_text = (
             "📚 Wallabag 插件\n"
-            "- 自动保存消息中的 URL 到 Wallabag\n"
+            "- 自动保存消息中的 URL 至 Wallabag\n"
             "- 指令:\n"
             "  /wallabag help          显示此帮助\n"
             "  /wallabag save <URL>    手动保存指定 URL\n"
-            "⚙️ 请在 WebUI 插件管理中完成配置"
+            "⚙️ 请在 WebUI 插件管理中完成配置\n"
         )
         yield event.plain_result(help_text)
 
@@ -147,17 +169,17 @@ class WallabagPlugin(Star):
         """显示 Wallabag 插件帮助信息"""
         help_text = (
             "📚 Wallabag 插件\n"
-            "- 自动保存消息中的 URL 到 Wallabag\n"
+            "- 自动保存消息中的 URL 至 Wallabag\n"
             "- 指令:\n"
             "  /wallabag help          显示此帮助\n"
             "  /wallabag save <URL>    手动保存指定 URL\n"
-            "⚙️ 请在 WebUI 插件管理中完成配置"
+            "⚙️ 请在 WebUI 插件管理中完成配置\n"
         )
         yield event.plain_result(help_text)
 
     @wallabag_group.command("save")
     async def save_url(self, event: AstrMessageEvent, url: str):
-        """手动保存URL到Wallabag"""
+        """手动保存 URL 到 Wallabag"""
         if not self._is_valid_url(url):
             yield event.plain_result("无效的 URL 格式")
             return
@@ -166,7 +188,7 @@ class WallabagPlugin(Star):
             result = await self._save_to_wallabag(url)
             if result:
                 yield event.plain_result(
-                    f"✅ 成功保存到 Wallabag\n📰 标题: {result.get('title', '未知')}\n⏱️ 阅读时间: {result.get('reading_time', 0)} 分钟"
+                    f"✅ 成功保存至 Wallabag\n📰 标题: {result.get('title', '未知')}\n⏱️ 阅读时间: {result.get('reading_time', 0)} 分钟"
                 )
             else:
                 yield event.plain_result("保存失败，请检查配置与 URL")
@@ -186,44 +208,63 @@ class WallabagPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
-        """监听所有消息，自动检测并保存URL"""
+        """监听所有消息，自动检测并保存 URL"""
         if not self.config.get('auto_save', True):
             return
 
         message_str = event.message_str.strip()
-        urls = self._extract_urls(message_str)
+        # 简单跳过命令消息，避免与手动保存重复触发
+        if message_str.startswith(('/wallabag', '/wb')):
+            return
 
-        if urls:
-            for url in urls:
-                if not self._cache_contains(url):
-                    try:
-                        result = await self._save_to_wallabag(url)
-                        if result:
-                            self._cache_add(url)
-                            self._save_cache()
-                            title = result.get('title', '未知')[:50]
-                            await event.send(event.plain_result(f"📎 自动保存: {title}..."))
-                    except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError) as e:
-                        logger.error(f"自动保存URL失败: {e}")
-                    except (WallabagAuthError, WallabagAPIError) as e:
-                        logger.error(f"自动保存URL插件错误: {e}")
-                    except Exception as e:
-                        logger.exception(f"自动保存URL发生未知异常: {e}")
+        urls = self._extract_urls(message_str)
+        if not urls:
+            return
+
+        updated = False
+        for url in urls:
+            if self._cache_contains(url):
+                continue
+            try:
+                result = await self._save_to_wallabag(url)
+                if result:
+                    self._cache_add(url)
+                    updated = True
+                    title = result.get('title', '未知')[:50]
+                    await event.send(event.plain_result(f"📎 自动保存: {title}..."))
+            except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError) as e:
+                logger.error(f"自动保存URL失败: {e}")
+            except (WallabagAuthError, WallabagAPIError) as e:
+                logger.error(f"自动保存URL插件错误: {e}")
+            except Exception as e:
+                logger.exception(f"自动保存URL发生未知异常: {e}")
+
+        # 仅在本条消息有新增 URL 时，统一落盘一次
+        if updated:
+            async with self._cache_lock:
+                self._save_cache()
 
     def _extract_urls(self, text: str) -> List[str]:
-        """从文本中提取URL"""
-        url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*'
-        urls = re.findall(url_pattern, text)
-        return [url for url in urls if self._is_valid_url(url)]
+        """从文本中提取 URL，去除尾随标点并去重（保持顺序）"""
+        if not text:
+            return []
+        candidates = self._url_in_text_regex.findall(text)
+        cleaned: List[str] = []
+        seen: Set[str] = set()
+        for raw in candidates:
+            url = raw.rstrip(self._trailing_punct)
+            if not url:
+                continue
+            if url not in seen:
+                seen.add(url)
+                cleaned.append(url)
+        return cleaned
 
     def _is_valid_url(self, url: str) -> bool:
-        """验证URL格式"""
-        if not url or not url.startswith(('http://', 'https://')):
+        """验证 URL 格式（用于手动保存等入口）"""
+        if not url or not url.startswith(("http://", "https://")):
             return False
-
-        # 基本URL格式验证
-        url_pattern = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*'
-        return re.match(url_pattern, url) is not None
+        return self._url_validation_regex.match(url) is not None
 
     async def _get_access_token(self) -> Optional[str]:
         """获取或刷新访问令牌"""
@@ -244,44 +285,52 @@ class WallabagPlugin(Star):
             token_url = f"{wallabag_url}/oauth/v2/token"
             max_attempts = int(self._get_advanced('max_retry_attempts', 3))
             retry_delay = float(self._get_advanced('retry_delay', 2))
+            jitter = float(self._get_advanced('retry_jitter', 0.5))
 
-            for attempt in range(1, max_attempts + 1):
-                if self.refresh_token:
-                    data = {
-                        'grant_type': 'refresh_token',
-                        'client_id': client_id,
-                        'client_secret': client_secret,
-                        'refresh_token': self.refresh_token
-                    }
-                else:
-                    data = {
-                        'grant_type': 'password',
-                        'client_id': client_id,
-                        'client_secret': client_secret,
-                        'username': username,
-                        'password': password
-                    }
+            async with self._token_lock:
+                # 再次检查，避免在等待锁期间已被其他协程刷新
+                now2 = asyncio.get_running_loop().time()
+                if self.access_token and self.token_expires_at and now2 < self.token_expires_at:
+                    return self.access_token
 
-                try:
-                    async with self.http_session.post(token_url, data=data) as response:
-                        if response.status == 200:
-                            token_data = await response.json()
-                            self.access_token = token_data['access_token']
-                            self.refresh_token = token_data.get('refresh_token')
-                            buffer = float(self._get_advanced('token_refresh_buffer', 60))
-                            expires_in = float(token_data.get('expires_in', 3600))
-                            effective = max(10.0, expires_in - buffer)
-                            self.token_expires_at = asyncio.get_running_loop().time() + effective
-                            return self.access_token
-                        else:
-                            error_text = await response.text()
-                            logger.error(f"获取访问令牌失败: {response.status} - {error_text}")
-                except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError, json.JSONDecodeError) as e:
-                    logger.error(f"获取访问令牌异常 (尝试 {attempt}/{max_attempts}): {e}")
+                for attempt in range(1, max_attempts + 1):
+                    if self.refresh_token:
+                        data = {
+                            'grant_type': 'refresh_token',
+                            'client_id': client_id,
+                            'client_secret': client_secret,
+                            'refresh_token': self.refresh_token
+                        }
+                    else:
+                        data = {
+                            'grant_type': 'password',
+                            'client_id': client_id,
+                            'client_secret': client_secret,
+                            'username': username,
+                            'password': password
+                        }
 
-                if attempt < max_attempts:
-                    await asyncio.sleep(retry_delay)
-            return None
+                    try:
+                        async with self.http_session.post(token_url, data=data) as response:
+                            if response.status == 200:
+                                token_data = await response.json()
+                                self.access_token = token_data['access_token']
+                                self.refresh_token = token_data.get('refresh_token')
+                                buffer = float(self._get_advanced('token_refresh_buffer', 60))
+                                expires_in = float(token_data.get('expires_in', 3600))
+                                effective = max(10.0, expires_in - buffer)
+                                self.token_expires_at = asyncio.get_running_loop().time() + effective
+                                return self.access_token
+                            else:
+                                error_text = await response.text()
+                                logger.error(f"获取访问令牌失败: {response.status} - {error_text}")
+                    except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError, json.JSONDecodeError) as e:
+                        logger.error(f"获取访问令牌异常 (尝试 {attempt}/{max_attempts}): {e}")
+
+                    if attempt < max_attempts:
+                        delay = retry_delay + random.uniform(0, jitter)
+                        await asyncio.sleep(delay)
+                return None
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.error(f"获取访问令牌网络异常: {e}")
@@ -291,7 +340,7 @@ class WallabagPlugin(Star):
             return None
 
     async def _save_to_wallabag(self, url: str) -> Optional[Dict]:
-        """保存URL到Wallabag"""
+        """保存 URL 到 Wallabag"""
         token = await self._get_access_token()
         if not token:
             raise WallabagAuthError("无法获取访问令牌")
@@ -302,6 +351,7 @@ class WallabagPlugin(Star):
 
         max_attempts = int(self._get_advanced('max_retry_attempts', 3))
         retry_delay = float(self._get_advanced('retry_delay', 2))
+        jitter = float(self._get_advanced('retry_jitter', 0.5))
 
         for attempt in range(1, max_attempts + 1):
             headers = {
@@ -338,7 +388,8 @@ class WallabagPlugin(Star):
                 logger.error(f"保存URL异常 (尝试 {attempt}/{max_attempts}): {e}")
 
             if attempt < max_attempts:
-                await asyncio.sleep(retry_delay)
+                delay = retry_delay + random.uniform(0, jitter)
+                await asyncio.sleep(delay)
 
         raise WallabagAPIError("保存失败：已达最大重试次数")
 
@@ -353,3 +404,4 @@ class WallabagPlugin(Star):
             # 兜底日志，避免静默失败
             logger.exception(f"获取高级设置 '{key}' 时发生未知错误: {e}")
             return default
+
