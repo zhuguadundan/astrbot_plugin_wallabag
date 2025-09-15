@@ -1,13 +1,14 @@
 import re
 import json
 import asyncio
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Deque, Set
 from pathlib import Path
+from collections import deque
 
 import aiohttp
 from aiohttp import ClientResponseError
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger
 from astrbot.api import AstrBotConfig
 
@@ -21,13 +22,18 @@ class WallabagPlugin(Star):
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.token_expires_at: Optional[float] = None
-        self.saved_urls_cache: set = set()
+        # URL 缓存采用 FIFO：使用队列维护顺序，集合用于快速查重
+        self._url_cache_queue: Deque[str] = deque()
+        self._url_cache_set: Set[str] = set()
 
         # 确保数据目录存在
-        self.data_dir = Path("data/wallabag")
+        try:
+            self.data_dir = StarTools.get_data_dir()
+        except Exception:
+            self.data_dir = Path("data/wallabag")
         self.data_dir.mkdir(exist_ok=True)
 
-        # 加载缓存
+        # 加载缓存（FIFO）
         self._load_cache()
 
     async def initialize(self):
@@ -52,25 +58,50 @@ class WallabagPlugin(Star):
         logger.info("Wallabag 插件已停止")
 
     def _load_cache(self):
-        """加载缓存的URL"""
+        """加载缓存的URL（保持插入顺序，超出时按 FIFO 淘汰）"""
         cache_file = self.data_dir / "saved_urls.json"
+        self._url_cache_queue.clear()
+        self._url_cache_set.clear()
         if cache_file.exists():
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
-                    self.saved_urls_cache = set(json.load(f))
-                logger.info(f"已加载 {len(self.saved_urls_cache)} 个缓存的URL")
-            except Exception as e:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    max_size = int(self.config.get('cache_max_size', 1000))
+                    for url in data[-max_size:]:
+                        if isinstance(url, str) and url not in self._url_cache_set:
+                            self._url_cache_queue.append(url)
+                            self._url_cache_set.add(url)
+                logger.info(f"已加载 {len(self._url_cache_set)} 个缓存的URL")
+            except (OSError, json.JSONDecodeError) as e:
                 logger.error(f"加载缓存失败: {e}")
-                self.saved_urls_cache = set()
+                self._url_cache_queue.clear()
+                self._url_cache_set.clear()
 
     def _save_cache(self):
-        """保存缓存的URL"""
+        """保存缓存的URL（保持顺序）"""
         cache_file = self.data_dir / "saved_urls.json"
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(list(self.saved_urls_cache), f, ensure_ascii=False, indent=2)
-        except Exception as e:
+                json.dump(list(self._url_cache_queue), f, ensure_ascii=False, indent=2)
+        except OSError as e:
             logger.error(f"保存缓存失败: {e}")
+
+    def _cache_contains(self, url: str) -> bool:
+        return url in self._url_cache_set
+
+    def _cache_add(self, url: str):
+        if url in self._url_cache_set:
+            return
+        self._url_cache_queue.append(url)
+        self._url_cache_set.add(url)
+        max_size = int(self.config.get('cache_max_size', 1000))
+        while len(self._url_cache_queue) > max_size:
+            try:
+                old = self._url_cache_queue.popleft()
+                self._url_cache_set.discard(old)
+            except IndexError:
+                break
 
     @filter.command_group("wallabag")
     def wallabag_group(self):
@@ -87,10 +118,10 @@ class WallabagPlugin(Star):
         """显示 Wallabag 插件帮助信息"""
         help_text = (
             "📚 Wallabag 插件\n"
-            "- 自动保存消息中的 URL 到 Wallabag\n"
+            "- 自动保存消息中的 URL 至 Wallabag\n"
             "- 指令:\n"
-            "  • /wallabag help          显示此帮助\n"
-            "  • /wallabag save <URL>    手动保存指定 URL\n"
+            "  /wallabag help          显示此帮助\n"
+            "  /wallabag save <URL>    手动保存指定 URL\n"
             "⚙️ 请在 WebUI 插件管理中完成配置"
         )
         yield event.plain_result(help_text)
@@ -106,13 +137,16 @@ class WallabagPlugin(Star):
             result = await self._save_to_wallabag(url)
             if result:
                 yield event.plain_result(
-                    f"✅ 成功保存到 Wallabag\n📰 标题: {result.get('title', '未知')}\n⏱️ 阅读时间: {result.get('reading_time', 0)} 分钟"
+                    f"✅ 成功保存至 Wallabag\n📰 标题: {result.get('title', '未知')}\n⏱️ 阅读时间: {result.get('reading_time', 0)} 分钟"
                 )
             else:
                 yield event.plain_result("保存失败，请检查配置与 URL")
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError) as e:
             logger.error(f"手动保存URL失败: {e}")
             yield event.plain_result(f"保存失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"手动保存URL发生未知异常: {e}")
+            yield event.plain_result("保存失败：发生未知错误")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -125,23 +159,18 @@ class WallabagPlugin(Star):
 
         if urls:
             for url in urls:
-                if url not in self.saved_urls_cache:
+                if not self._cache_contains(url):
                     try:
                         result = await self._save_to_wallabag(url)
                         if result:
-                            self.saved_urls_cache.add(url)
-                            # 限制缓存大小
-                            max_size = int(self.config.get('cache_max_size', 1000))
-                            while len(self.saved_urls_cache) > max_size:
-                                try:
-                                    self.saved_urls_cache.pop()
-                                except KeyError:
-                                    break
+                            self._cache_add(url)
                             self._save_cache()
                             title = result.get('title', '未知')[:50]
                             await event.send(event.plain_result(f"📎 自动保存: {title}..."))
-                    except Exception as e:
+                    except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError) as e:
                         logger.error(f"自动保存URL失败: {e}")
+                    except Exception as e:
+                        logger.error(f"自动保存URL发生未知异常: {e}")
 
     def _extract_urls(self, text: str) -> List[str]:
         """从文本中提取URL"""
@@ -160,7 +189,7 @@ class WallabagPlugin(Star):
 
     async def _get_access_token(self) -> Optional[str]:
         """获取或刷新访问令牌"""
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if self.access_token and self.token_expires_at and now < self.token_expires_at:
             return self.access_token
 
@@ -202,20 +231,23 @@ class WallabagPlugin(Star):
                             self.access_token = token_data['access_token']
                             self.refresh_token = token_data.get('refresh_token')
                             buffer = float(self._get_advanced('token_refresh_buffer', 60))
-                            self.token_expires_at = asyncio.get_event_loop().time() + token_data.get('expires_in', 3600) - buffer
+                            self.token_expires_at = asyncio.get_running_loop().time() + token_data.get('expires_in', 3600) - buffer
                             return self.access_token
                         else:
                             error_text = await response.text()
                             logger.error(f"获取访问令牌失败: {response.status} - {error_text}")
-                except Exception as e:
+                except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError, json.JSONDecodeError) as e:
                     logger.error(f"获取访问令牌异常 (尝试 {attempt}/{max_attempts}): {e}")
 
                 if attempt < max_attempts:
                     await asyncio.sleep(retry_delay)
             return None
 
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error(f"获取访问令牌网络异常: {e}")
+            return None
         except Exception as e:
-            logger.error(f"获取访问令牌异常: {e}")
+            logger.error(f"获取访问令牌发生未知异常: {e}")
             return None
 
     async def _save_to_wallabag(self, url: str) -> Optional[Dict]:
@@ -252,7 +284,7 @@ class WallabagPlugin(Star):
                         continue
                     elif 500 <= response.status < 600:
                         error_text = await response.text()
-                        logger.error(f"服务端错误: {response.status} - {error_text}")
+                        logger.error(f"服务端错误 {response.status} - {error_text}")
                         # 5xx 进行重试
                     else:
                         error_text = await response.text()
@@ -272,3 +304,4 @@ class WallabagPlugin(Star):
             return adv.get(key, default)
         except Exception:
             return default
+

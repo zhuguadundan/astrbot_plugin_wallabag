@@ -42,3 +42,6 @@
 
 ## 许可证
 MIT
+ 
+## Security
+- Warning: setting `advanced_settings.skip_ssl_verify = true` disables SSL/TLS certificate verification and exposes you to MITM risks. Use only in trusted networks or for testing. Keep it `false` in production.
