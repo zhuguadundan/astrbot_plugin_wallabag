@@ -11,3 +11,5 @@ env/
 .DS_Store
 
 .claude/
+
+_conf_schema_copy.json
