@@ -194,13 +194,14 @@ class WallabagPlugin(Star):
         urls = self._extract_urls(message_str)
 
         if urls:
+            updated = False
             for url in urls:
                 if not self._cache_contains(url):
                     try:
                         result = await self._save_to_wallabag(url)
                         if result:
                             self._cache_add(url)
-                            self._save_cache()
+                            updated = True
                             title = result.get('title', '未知')[:50]
                             await event.send(event.plain_result(f"📎 自动保存: {title}..."))
                     except (aiohttp.ClientError, asyncio.TimeoutError, ClientResponseError) as e:
@@ -210,11 +211,15 @@ class WallabagPlugin(Star):
                     except Exception as e:
                         logger.exception(f"自动保存URL发生未知异常: {e}")
 
+            if updated:
+                self._save_cache()
+
     def _extract_urls(self, text: str) -> List[str]:
         """从文本中提取URL"""
         url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*'
         urls = re.findall(url_pattern, text)
-        return [url for url in urls if self._is_valid_url(url)]
+        # 依赖一次性提取结果即可，避免二次正则验证的重复开销
+        return urls
 
     def _is_valid_url(self, url: str) -> bool:
         """验证URL格式"""
